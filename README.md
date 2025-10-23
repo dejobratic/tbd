@@ -23,40 +23,61 @@ It uses **Go**, **PostgreSQL**, **Kafka**, and **Docker Compose** to showcase AP
 
 ```mermaid
 flowchart LR
-    subgraph Client
-        k6[k6 Load Tester]
+    %% Overall direction
+    %% Styles (optional; safe defaults)
+    classDef client fill:#eef,stroke:#88a;
+    classDef services fill:#eefeef,stroke:#6a6;
+    classDef messaging fill:#fff6dd,stroke:#cc9;
+    classDef data fill:#e8f2ff,stroke:#59a;
+    classDef observ fill:#f5f5f5,stroke:#999;
+
+    %% Client
+    subgraph client[Client]
+        direction TB
+        k6["k6 Load Tester"]:::client
     end
 
-    subgraph Services
-        api[API (Go)\nREST + gRPC*]
-        worker[Worker\n(Kafka Consumer/Producer)]
+    %% Core services
+    subgraph services[Services]
+        direction TB
+        api["API (Go)<br/>REST + gRPC*"]:::services
+        worker["Worker<br/>(Kafka Consumer/Producer)"]:::services
     end
 
-    subgraph Messaging
-        kafka[(Kafka\norder.created)]
+    %% Messaging
+    subgraph msg[Messaging]
+        direction TB
+        kafka[("(Kafka)<br/>order.created / order.processed")]:::messaging
     end
 
-    subgraph Data
-        postgres[(Postgres)]
+    %% Data
+    subgraph data[Data]
+        direction TB
+        postgres["Postgres"]:::data
     end
 
-    subgraph Observability
-        otel[OpenTelemetry Collector]
-        jaeger[Jaeger]
-        prometheus[Prometheus]
-        grafana[Grafana]
-        pgadmin[pgAdmin]
-        kafkaui[Kafka UI]
+    %% Observability
+    subgraph obs[Observability]
+        direction TB
+        otel["OpenTelemetry Collector"]:::observ
+        jaeger["Jaeger"]:::observ
+        prometheus["Prometheus"]:::observ
+        grafana["Grafana"]:::observ
+        pgadmin["pgAdmin"]:::observ
+        kafkaui["Kafka UI"]:::observ
     end
 
+    %% Happy-path flow
     k6 --> api
-    api -->|1. Write order| postgres
-    api -->|2. Publish order.created| kafka
+    api -->|"(1) Write order"| postgres
+    api -->|"(2) Publish order.created"| kafka
     kafka --> worker
-    worker -->|3. Update status| postgres
-    worker -->|4. Emit order.processed| kafka
-    api -->|Traces & metrics| otel
-    worker -->|Traces & metrics| otel
+    worker -->|"(3) Update status"| postgres
+    worker -->|"(4) Emit order.processed"| kafka
+
+    %% Telemetry & UIs
+    api -->|"Traces & metrics"| otel
+    worker -->|"Traces & metrics"| otel
     otel --> jaeger
     otel --> prometheus
     prometheus --> grafana
