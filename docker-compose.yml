@@ -1,0 +1,305 @@
+version: "3.9"
+
+# tbd (tiny, but distributed) — local distributed system with Go API, Worker, Postgres, Kafka, and full observability.
+# Notes:
+# - API and Worker are built from local Dockerfiles (see ./cmd/api and ./cmd/worker).
+# - Kafka runs in KRaft (no ZooKeeper) using the Bitnami image.
+# - OpenTelemetry Collector receives OTLP from services and exports traces to Jaeger; Prometheus scrapes metrics.
+# - Includes two init jobs: one for DB migrations, another to create Kafka topics.
+
+x-app-env: &app-env
+  OTEL_SERVICE_NAME: ""
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+  OTEL_RESOURCE_ATTRIBUTES: deployment.environment=local
+  # Enable Go OTel runtime metrics if your app is configured to collect them:
+  GODEBUG: xds=1
+
+x-logging: &json-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+networks:
+  tbd-net:
+
+volumes:
+  postgres-data:
+  kafka-data:
+  grafana-data:
+  prometheus-data:
+
+configs:
+  otel-collector-config:
+    file: ./configs/docker/otel-collector.yaml
+  prometheus-config:
+    file: ./configs/docker/prometheus.yml
+
+services:
+
+  # --- DATA PLANE ---
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: tbd-postgres
+    networks: [tbd-net]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tbd
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: *json-logging
+
+  pgadmin:
+    image: dpage/pgadmin4:8.12
+    container_name: tbd-pgadmin
+    networks: [tbd-net]
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@tbd.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    logging: *json-logging
+
+  kafka:
+    image: bitnami/kafka:3.7
+    container_name: tbd-kafka
+    networks: [tbd-net]
+    restart: unless-stopped
+    ports:
+      - "29092:29092"   # external (host) listener
+      - "9092:9092"     # internal (container-network) listener (optional to expose)
+    environment:
+      # KRaft single-node setup
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # QoL
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_ENABLE_KRAFT: "yes"
+    volumes:
+      - kafka-data:/bitnami/kafka
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    logging: *json-logging
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: tbd-kafka-ui
+    networks: [tbd-net]
+    restart: unless-stopped
+    ports:
+      - "8082:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_READONLY: "false"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    logging: *json-logging
+
+  # --- CONTROL PLANE / OBSERVABILITY ---
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.106.1
+    container_name: tbd-otel-collector
+    networks: [tbd-net]
+    restart: unless-stopped
+    command: ["--config=/etc/otel-collector.yaml"]
+    configs:
+      - source: otel-collector-config
+        target: /etc/otel-collector.yaml
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "9464:9464"   # Prometheus exporter (metrics)
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "-", "http://localhost:13133/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    logging: *json-logging
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    container_name: tbd-jaeger
+    networks: [tbd-net]
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"  # UI
+      - "14268:14268"  # Thrift HTTP
+      - "14250:14250"  # gRPC
+    depends_on:
+      - otel-collector
+    logging: *json-logging
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: tbd-prometheus
+    networks: [tbd-net]
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    configs:
+      - source: prometheus-config
+        target: /etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus-data:/prometheus
+    depends_on:
+      - otel-collector
+    logging: *json-logging
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: tbd-grafana
+    networks: [tbd-net]
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    logging: *json-logging
+
+  # --- APPLICATIONS ---
+
+  api:
+    build:
+      context: .
+      dockerfile: ./cmd/api/Dockerfile
+    container_name: tbd-api
+    networks: [tbd-net]
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      OTEL_SERVICE_NAME: api
+      API_HTTP_ADDR: ":8080"
+      API_METRICS_ADDR: ":8080"   # expose /metrics on same port
+      DB_DSN: "postgres://postgres:postgres@postgres:5432/tbd?sslmode=disable"
+      KAFKA_BROKERS: "kafka:9092"
+      KAFKA_TOPIC_ORDER_CREATED: "order.created"
+      KAFKA_TOPIC_ORDER_PROCESSED: "order.processed"
+      KAFKA_TOPIC_ORDER_FAILED: "order.failed"
+      IDEMPOTENCY_TTL_HOURS: "72"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    logging: *json-logging
+
+  worker:
+    build:
+      context: .
+      dockerfile: ./cmd/worker/Dockerfile
+    container_name: tbd-worker
+    networks: [tbd-net]
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      OTEL_SERVICE_NAME: worker
+      WORKER_METRICS_ADDR: ":2112" # worker /metrics
+      DB_DSN: "postgres://postgres:postgres@postgres:5432/tbd?sslmode=disable"
+      KAFKA_BROKERS: "kafka:9092"
+      KAFKA_GROUP_ID: "orders-processor"
+      KAFKA_TOPIC_ORDER_CREATED: "order.created"
+      KAFKA_TOPIC_ORDER_PROCESSED: "order.processed"
+      KAFKA_TOPIC_ORDER_FAILED: "order.failed"
+      KAFKA_TOPIC_DLQ: "order.dlq"
+    ports:
+      - "2112:2112"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    logging: *json-logging
+
+  # --- INIT JOBS ---
+
+  db-migrate:
+    image: migrate/migrate:v4.17.1
+    container_name: tbd-db-migrate
+    networks: [tbd-net]
+    restart: "no"
+    entrypoint: [ "sh", "-c" ]
+    command:
+      - >
+        until pg_isready -h postgres -p 5432 -U postgres; do echo 'waiting for db...' && sleep 2; done &&
+        migrate -path /migrations -database ${DATABASE_URL} up
+    environment:
+      DATABASE_URL: "postgres://postgres:postgres@postgres:5432/tbd?sslmode=disable"
+      PGPASSWORD: "postgres"
+    volumes:
+      - ./migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *json-logging
+
+  kafka-init:
+    image: bitnami/kafka:3.7
+    container_name: tbd-kafka-init
+    networks: [tbd-net]
+    restart: "no"
+    entrypoint: [ "bash", "-lc" ]
+    command: >
+      "
+      until /opt/bitnami/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null 2>&1;
+      do echo 'waiting for kafka...' && sleep 2; done;
+      /opt/bitnami/kafka/bin/kafka-topics.sh --create --if-not-exists --bootstrap-server kafka:9092 --replication-factor 1 --partitions 6 --topic order.created;
+      /opt/bitnami/kafka/bin/kafka-topics.sh --create --if-not-exists --bootstrap-server kafka:9092 --replication-factor 1 --partitions 6 --topic order.processed;
+      /opt/bitnami/kafka/bin/kafka-topics.sh --create --if-not-exists --bootstrap-server kafka:9092 --replication-factor 1 --partitions 6 --topic order.failed;
+      /opt/bitnami/kafka/bin/kafka-topics.sh --create --if-not-exists --bootstrap-server kafka:9092 --replication-factor 1 --partitions 6 --topic order.dlq;
+      echo 'topics ready.'
+      "
+    depends_on:
+      kafka:
+        condition: service_healthy
+    logging: *json-logging
+
+# End of file
