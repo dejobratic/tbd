@@ -21,43 +21,51 @@ It uses **Go**, **PostgreSQL**, **Kafka**, and **Docker Compose** to showcase AP
 
 ## ⚙️ Architecture
 
-```text
-                    +--------------------+
-                    |   k6 Load Tester   |
-                    +---------+----------+
-                              |
-                              v
-                      +-------+-------+
-                      |    API (Go)   |
-                      | REST + gRPC*  |
-                      +-------+-------+
-                              |
-          (1) Write Order     |   (2) Publish Event
-                              v
-               +--------------+--------------+
-               |     Kafka (order.created)   |
-               +--------------+--------------+
-                              |
-                              v
-                      +-------+-------+
-                      |    Worker     |
-                      | (Kafka Cons.) |
-                      +-------+-------+
-                              |
-                (3) Update DB | (4) Emit processed
-                              v
-                         +----+----+
-                         | Postgres |
-                         +----+----+
-                              |
-                              v
-                    +---------+----------+
-                    |    Grafana / UI    |
-                    | Jaeger / pgAdmin   |
-                    +--------------------+
+```mermaid
+flowchart LR
+    subgraph Client
+        k6[k6 Load Tester]
+    end
+
+    subgraph Services
+        api[API (Go)\nREST + gRPC*]
+        worker[Worker\n(Kafka Consumer/Producer)]
+    end
+
+    subgraph Messaging
+        kafka[(Kafka\norder.created)]
+    end
+
+    subgraph Data
+        postgres[(Postgres)]
+    end
+
+    subgraph Observability
+        otel[OpenTelemetry Collector]
+        jaeger[Jaeger]
+        prometheus[Prometheus]
+        grafana[Grafana]
+        pgadmin[pgAdmin]
+        kafkaui[Kafka UI]
+    end
+
+    k6 --> api
+    api -->|1. Write order| postgres
+    api -->|2. Publish order.created| kafka
+    kafka --> worker
+    worker -->|3. Update status| postgres
+    worker -->|4. Emit order.processed| kafka
+    api -->|Traces & metrics| otel
+    worker -->|Traces & metrics| otel
+    otel --> jaeger
+    otel --> prometheus
+    prometheus --> grafana
+    postgres --> pgadmin
+    kafka --> kafkaui
+```
 
 * gRPC support planned later
-```
+
 
 ---
 
