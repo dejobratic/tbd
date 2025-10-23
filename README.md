@@ -284,14 +284,35 @@ For advanced simulation:
 ```
 tbd/
 ├── cmd/
-│   ├── api/
-│   └── worker/
+│   ├── api/               # main.go wires http + use cases + adapters
+│   └── worker/            # main.go wires kafka consumer + use cases
 ├── internal/
 │   ├── orders/
-│   ├── db/
-│   ├── kafka/
-│   ├── telemetry/
-│   └── idempotency/
+│   │   ├── domain/
+│   │   │   ├── order.go
+│   │   │   └── status.go
+│   │   ├── app/
+│   │   │   ├── commands/
+│   │   │   │   ├── create_order.go
+│   │   │   │   ├── cancel_order.go
+│   │   │   │   └── mark_processed.go
+│   │   │   └── queries/
+│   │   │       ├── get_order.go
+│   │   │       └── list_orders.go
+│   │   ├── ports/
+│   │   │   ├── repository.go        # OrderRepository
+│   │   │   ├── event_bus.go         # EventBus
+│   │   │   └── idempotency.go       # IdempotencyStore
+│   │   └── adapters/
+│   │       ├── http/                # handlers, routing, validation
+│   │       ├── grpc/                # later
+│   │       ├── pg/                  # repository impl (pgx/sqlc)
+│   │       ├── kafka/               # producer/consumer impl
+│   │       └── idem/                # idem impl (postgres or redis)
+│   ├── db/                          # connect, migrations runner
+│   ├── kafka/                       # client setup, consumer group helper
+│   ├── telemetry/                   # OTel setup, middleware
+│   └── idempotency/                 # generic key store if shared
 ├── configs/
 │   ├── docker/
 │   └── grafana/
@@ -312,7 +333,6 @@ tbd/
 - **Observability first** – traces, metrics, logs are first-class.
 - **Language focus** – idiomatic Go with context propagation.
 - **Safe failure** – at-least-once delivery with deduplication.
-
 ---
 
 ## 🧱 License
