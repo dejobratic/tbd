@@ -131,14 +131,14 @@ flowchart LR
 | `GET` | `/healthz` | Liveness check |
 | `GET` | `/readyz` | Readiness (checks DB + Kafka) |
 | `GET` | `/metrics` | Prometheus scrape endpoint |
-| `POST` | `/v1/orders` | Create order (requires `Idempotency-Key` header) |
+| `POST` | `/v1/orders` | Create order (requires `Idempotency-Key`; see details below) |
 | `GET` | `/v1/orders/{id}` | Retrieve order by ID |
 | `GET` | `/v1/orders` | List orders (`?status=&page=&page_size=`) |
 | `POST` | `/v1/orders/{id}/cancel` | Cancel pending order |
 
 ---
 
-## 🔁 Idempotency-Key
+## 🔁 Idempotency for POST /v1/orders
 
 Use an `Idempotency-Key` header for **POST /v1/orders** to ensure safe retries.
 
