@@ -196,11 +196,28 @@ services:
 
   # --- APPLICATIONS ---
 
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: tbd-nginx
+    networks: [tbd-net]
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    logging: *json-logging
+
   api:
     build:
       context: .
       dockerfile: ./cmd/api/Dockerfile
-    container_name: tbd-api
     networks: [tbd-net]
     restart: unless-stopped
     environment:
@@ -214,8 +231,6 @@ services:
       KAFKA_TOPIC_ORDER_PROCESSED: "order.processed"
       KAFKA_TOPIC_ORDER_FAILED: "order.failed"
       IDEMPOTENCY_TTL_HOURS: "72"
-    ports:
-      - "8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -234,7 +249,6 @@ services:
     build:
       context: .
       dockerfile: ./cmd/worker/Dockerfile
-    container_name: tbd-worker
     networks: [tbd-net]
     restart: unless-stopped
     environment:
@@ -248,8 +262,6 @@ services:
       KAFKA_TOPIC_ORDER_PROCESSED: "order.processed"
       KAFKA_TOPIC_ORDER_FAILED: "order.failed"
       KAFKA_TOPIC_DLQ: "order.dlq"
-    ports:
-      - "2112:2112"
     depends_on:
       postgres:
         condition: service_healthy
