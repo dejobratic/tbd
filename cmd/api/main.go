@@ -12,10 +12,11 @@ import (
 	"time"
 
 	"github.com/dejobratic/tbd/internal/config"
-	idememory "github.com/dejobratic/tbd/internal/idempotency/memory"
+	"github.com/dejobratic/tbd/internal/database"
+	idempostgres "github.com/dejobratic/tbd/internal/idempotency/postgres"
 	"github.com/dejobratic/tbd/internal/kafka"
 	httpadapter "github.com/dejobratic/tbd/internal/orders/adapters/http"
-	ordersmemory "github.com/dejobratic/tbd/internal/orders/adapters/memory"
+	orderspostgres "github.com/dejobratic/tbd/internal/orders/adapters/postgres"
 	ordersapp "github.com/dejobratic/tbd/internal/orders/app"
 )
 
@@ -32,8 +33,24 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	repo := ordersmemory.NewRepository()
-	idemStore := idememory.NewStore()
+	pool, err := database.NewPool(ctx, cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("failed to create database pool", "error", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	if cfg.AutoMigrate {
+		logger.Info("running database migrations", "path", cfg.MigrationsPath)
+		if err := database.RunMigrations(cfg.DatabaseURL, cfg.MigrationsPath); err != nil {
+			logger.Error("failed to run migrations", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("migrations completed successfully")
+	}
+
+	repo := orderspostgres.NewRepository(pool)
+	idemStore := idempostgres.NewStore(pool)
 	eventBus := kafka.NewNoopEventBus()
 
 	service := ordersapp.NewService(repo, eventBus, idemStore)
@@ -43,7 +60,11 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if err := database.CheckHealth(r.Context(), pool); err != nil {
+			respondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not ready", "error": err.Error()})
+			return
+		}
 		respondJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
 	mux.HandleFunc(cfg.MetricsPath, func(w http.ResponseWriter, _ *http.Request) {
