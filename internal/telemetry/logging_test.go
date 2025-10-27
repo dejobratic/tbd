@@ -106,10 +106,8 @@ func TestTraceAndSpanIDInclusion(t *testing.T) {
 	})
 	logger := slog.New(&traceHandler{baseHandler: handler})
 
-	exp := tracetest.NewInMemoryExporter()
-	tp := trace.NewTracerProvider(trace.WithSyncer(exp))
-	otel.SetTracerProvider(tp)
-	defer otel.SetTracerProvider(nil)
+	_, cleanup := setupTracerProvider(t)
+	defer cleanup()
 
 	ctx := context.Background()
 	tracer := otel.Tracer("test")
@@ -205,10 +203,8 @@ func TestLogWithAttributes(t *testing.T) {
 
 	loggerWithAttrs := baseLogger.With("request_id", "req-123")
 
-	exp := tracetest.NewInMemoryExporter()
-	tp := trace.NewTracerProvider(trace.WithSyncer(exp))
-	otel.SetTracerProvider(tp)
-	defer otel.SetTracerProvider(nil)
+	_, cleanup := setupTracerProvider(t)
+	defer cleanup()
 
 	ctx := context.Background()
 	tracer := otel.Tracer("test")
@@ -241,10 +237,8 @@ func TestLogWithGroup(t *testing.T) {
 
 	groupLogger := baseLogger.WithGroup("http")
 
-	exp := tracetest.NewInMemoryExporter()
-	tp := trace.NewTracerProvider(trace.WithSyncer(exp))
-	otel.SetTracerProvider(tp)
-	defer otel.SetTracerProvider(nil)
+	_, cleanup := setupTracerProvider(t)
+	defer cleanup()
 
 	ctx := context.Background()
 	tracer := otel.Tracer("test")
@@ -385,10 +379,8 @@ func TestLogWithChainedAttributes(t *testing.T) {
 	})
 	logger := slog.New(&traceHandler{baseHandler: handler})
 
-	exp := tracetest.NewInMemoryExporter()
-	tp := trace.NewTracerProvider(trace.WithSyncer(exp))
-	otel.SetTracerProvider(tp)
-	defer otel.SetTracerProvider(nil)
+	_, cleanup := setupTracerProvider(t)
+	defer cleanup()
 
 	ctx := context.Background()
 	tracer := otel.Tracer("test")
@@ -426,10 +418,8 @@ func TestLogWithNestedGroups(t *testing.T) {
 	})
 	logger := slog.New(&traceHandler{baseHandler: handler})
 
-	exp := tracetest.NewInMemoryExporter()
-	tp := trace.NewTracerProvider(trace.WithSyncer(exp))
-	otel.SetTracerProvider(tp)
-	defer otel.SetTracerProvider(nil)
+	_, cleanup := setupTracerProvider(t)
+	defer cleanup()
 
 	ctx := context.Background()
 	tracer := otel.Tracer("test")
@@ -473,10 +463,8 @@ func TestLogWithAttributesAndGroups(t *testing.T) {
 	})
 	logger := slog.New(&traceHandler{baseHandler: handler})
 
-	exp := tracetest.NewInMemoryExporter()
-	tp := trace.NewTracerProvider(trace.WithSyncer(exp))
-	otel.SetTracerProvider(tp)
-	defer otel.SetTracerProvider(nil)
+	_, cleanup := setupTracerProvider(t)
+	defer cleanup()
 
 	ctx := context.Background()
 	tracer := otel.Tracer("test")
@@ -519,10 +507,8 @@ func TestLogWithMultipleAttributes(t *testing.T) {
 	})
 	logger := slog.New(&traceHandler{baseHandler: handler})
 
-	exp := tracetest.NewInMemoryExporter()
-	tp := trace.NewTracerProvider(trace.WithSyncer(exp))
-	otel.SetTracerProvider(tp)
-	defer otel.SetTracerProvider(nil)
+	_, cleanup := setupTracerProvider(t)
+	defer cleanup()
 
 	ctx := context.Background()
 	tracer := otel.Tracer("test")

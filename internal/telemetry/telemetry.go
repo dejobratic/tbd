@@ -119,8 +119,6 @@ func Initialize(ctx context.Context, cfg Config, opts ...Option) (*Telemetry, er
 		propagation.Baggage{},
 	))
 
-	tracerName = cfg.ServiceName
-
 	return tel, nil
 }
 

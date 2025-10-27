@@ -153,21 +153,9 @@ func TestInitialize(t *testing.T) {
 	})
 
 	t.Run("initializes successfully with tracing enabled", func(t *testing.T) {
-		ctx := context.Background()
-		cfg := Config{
-			ServiceName:    "test-service",
-			ServiceVersion: "1.0.0",
-			Environment:    "test",
-			EnableTracing:  true,
-			EnableMetrics:  false,
-			SampleRate:     1.0,
-		}
+		tel, cleanup := setupTelemetryWithTracing(t)
+		defer cleanup()
 
-		tel, err := Initialize(ctx, cfg, WithTraceExporter(NewNoopTraceExporter()))
-
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
 		if tel == nil {
 			t.Fatal("expected telemetry, got nil")
 		}
@@ -177,30 +165,12 @@ func TestInitialize(t *testing.T) {
 		if tel.MeterProvider() != nil {
 			t.Error("expected nil meter provider, got non-nil")
 		}
-
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := tel.Shutdown(shutdownCtx); err != nil {
-			t.Errorf("shutdown failed: %v", err)
-		}
 	})
 
 	t.Run("initializes successfully with metrics enabled", func(t *testing.T) {
-		ctx := context.Background()
-		cfg := Config{
-			ServiceName:    "test-service",
-			ServiceVersion: "1.0.0",
-			Environment:    "test",
-			EnableTracing:  false,
-			EnableMetrics:  true,
-			SampleRate:     1.0,
-		}
+		tel, cleanup := setupTelemetryWithMetrics(t)
+		defer cleanup()
 
-		tel, err := Initialize(ctx, cfg, WithMetricExporter(NewNoopMetricExporter()))
-
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
 		if tel == nil {
 			t.Fatal("expected telemetry, got nil")
 		}
@@ -210,33 +180,12 @@ func TestInitialize(t *testing.T) {
 		if tel.MeterProvider() == nil {
 			t.Error("expected meter provider, got nil")
 		}
-
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := tel.Shutdown(shutdownCtx); err != nil {
-			t.Errorf("shutdown failed: %v", err)
-		}
 	})
 
 	t.Run("initializes successfully with both tracing and metrics enabled", func(t *testing.T) {
-		ctx := context.Background()
-		cfg := Config{
-			ServiceName:    "test-service",
-			ServiceVersion: "1.0.0",
-			Environment:    "test",
-			EnableTracing:  true,
-			EnableMetrics:  true,
-			SampleRate:     0.5,
-		}
+		tel, cleanup := setupTelemetryWithBoth(t)
+		defer cleanup()
 
-		tel, err := Initialize(ctx, cfg,
-			WithTraceExporter(NewNoopTraceExporter()),
-			WithMetricExporter(NewNoopMetricExporter()),
-		)
-
-		if err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
 		if tel == nil {
 			t.Fatal("expected telemetry, got nil")
 		}
@@ -245,12 +194,6 @@ func TestInitialize(t *testing.T) {
 		}
 		if tel.MeterProvider() == nil {
 			t.Error("expected meter provider, got nil")
-		}
-
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := tel.Shutdown(shutdownCtx); err != nil {
-			t.Errorf("shutdown failed: %v", err)
 		}
 	})
 
@@ -355,24 +298,12 @@ func TestShutdown(t *testing.T) {
 	})
 
 	t.Run("shuts down successfully when only tracing is enabled", func(t *testing.T) {
-		ctx := context.Background()
-		cfg := Config{
-			ServiceName:    "test-service",
-			ServiceVersion: "1.0.0",
-			EnableTracing:  true,
-			EnableMetrics:  false,
-			SampleRate:     1.0,
-		}
-
-		tel, err := Initialize(ctx, cfg, WithTraceExporter(NewNoopTraceExporter()))
-		if err != nil {
-			t.Fatalf("initialize failed: %v", err)
-		}
+		tel, _ := setupTelemetryWithTracing(t)
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		err = tel.Shutdown(shutdownCtx)
+		err := tel.Shutdown(shutdownCtx)
 
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
@@ -380,24 +311,12 @@ func TestShutdown(t *testing.T) {
 	})
 
 	t.Run("shuts down successfully when only metrics is enabled", func(t *testing.T) {
-		ctx := context.Background()
-		cfg := Config{
-			ServiceName:    "test-service",
-			ServiceVersion: "1.0.0",
-			EnableTracing:  false,
-			EnableMetrics:  true,
-			SampleRate:     1.0,
-		}
-
-		tel, err := Initialize(ctx, cfg, WithMetricExporter(NewNoopMetricExporter()))
-		if err != nil {
-			t.Fatalf("initialize failed: %v", err)
-		}
+		tel, _ := setupTelemetryWithMetrics(t)
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		err = tel.Shutdown(shutdownCtx)
+		err := tel.Shutdown(shutdownCtx)
 
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
@@ -405,27 +324,12 @@ func TestShutdown(t *testing.T) {
 	})
 
 	t.Run("shuts down successfully when both are enabled", func(t *testing.T) {
-		ctx := context.Background()
-		cfg := Config{
-			ServiceName:    "test-service",
-			ServiceVersion: "1.0.0",
-			EnableTracing:  true,
-			EnableMetrics:  true,
-			SampleRate:     1.0,
-		}
-
-		tel, err := Initialize(ctx, cfg,
-			WithTraceExporter(NewNoopTraceExporter()),
-			WithMetricExporter(NewNoopMetricExporter()),
-		)
-		if err != nil {
-			t.Fatalf("initialize failed: %v", err)
-		}
+		tel, _ := setupTelemetryWithBoth(t)
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		err = tel.Shutdown(shutdownCtx)
+		err := tel.Shutdown(shutdownCtx)
 
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
@@ -451,23 +355,8 @@ func TestGetterMethods(t *testing.T) {
 	})
 
 	t.Run("TracerProvider returns provider when tracing enabled", func(t *testing.T) {
-		ctx := context.Background()
-		cfg := Config{
-			ServiceName:    "test-service",
-			ServiceVersion: "1.0.0",
-			EnableTracing:  true,
-			SampleRate:     1.0,
-		}
-
-		tel, err := Initialize(ctx, cfg, WithTraceExporter(NewNoopTraceExporter()))
-		if err != nil {
-			t.Fatalf("initialize failed: %v", err)
-		}
-		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = tel.Shutdown(shutdownCtx)
-		}()
+		tel, cleanup := setupTelemetryWithTracing(t)
+		defer cleanup()
 
 		if tel.TracerProvider() == nil {
 			t.Error("expected tracer provider, got nil")
@@ -475,23 +364,8 @@ func TestGetterMethods(t *testing.T) {
 	})
 
 	t.Run("MeterProvider returns provider when metrics enabled", func(t *testing.T) {
-		ctx := context.Background()
-		cfg := Config{
-			ServiceName:    "test-service",
-			ServiceVersion: "1.0.0",
-			EnableMetrics:  true,
-			SampleRate:     1.0,
-		}
-
-		tel, err := Initialize(ctx, cfg, WithMetricExporter(NewNoopMetricExporter()))
-		if err != nil {
-			t.Fatalf("initialize failed: %v", err)
-		}
-		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_ = tel.Shutdown(shutdownCtx)
-		}()
+		tel, cleanup := setupTelemetryWithMetrics(t)
+		defer cleanup()
 
 		if tel.MeterProvider() == nil {
 			t.Error("expected meter provider, got nil")

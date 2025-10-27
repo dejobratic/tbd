@@ -32,18 +32,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	logLevel := parseLogLevel(cfg.LogLevel)
+	logLevel := parseLogLevel(cfg.Telemetry.LogLevel)
 	logger := telemetry.NewLogger(logLevel)
 	slog.SetDefault(logger)
 
 	tel, err := telemetry.Initialize(ctx, telemetry.Config{
-		ServiceName:     cfg.ServiceName,
-		ServiceVersion:  cfg.ServiceVersion,
-		Environment:     cfg.Environment,
-		OTLPEndpoint:    cfg.OTelEndpoint,
-		EnableTracing:   cfg.OTelEnableTracing,
-		EnableMetrics:   cfg.OTelEnableMetrics,
-		SampleRate:      cfg.OTelSampleRate,
+		ServiceName:     cfg.Service.Name,
+		ServiceVersion:  cfg.Service.Version,
+		Environment:     cfg.Service.Environment,
+		OTLPEndpoint:    cfg.Telemetry.OTelEndpoint,
+		EnableTracing:   cfg.Telemetry.EnableTracing,
+		EnableMetrics:   cfg.Telemetry.EnableMetrics,
+		SampleRate:      cfg.Telemetry.SampleRate,
 	})
 	if err != nil {
 		logger.Error("failed to initialize telemetry", "error", err)
@@ -58,25 +58,25 @@ func main() {
 	}()
 
 	logger.Info("telemetry initialized",
-		"service", cfg.ServiceName,
-		"version", cfg.ServiceVersion,
-		"tracing_enabled", cfg.OTelEnableTracing,
-		"metrics_enabled", cfg.OTelEnableMetrics,
+		"service", cfg.Service.Name,
+		"version", cfg.Service.Version,
+		"tracing_enabled", cfg.Telemetry.EnableTracing,
+		"metrics_enabled", cfg.Telemetry.EnableMetrics,
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := database.NewPool(ctx, cfg.DatabaseURL)
+	pool, err := database.NewPool(ctx, cfg.Database.URL)
 	if err != nil {
 		logger.Error("failed to create database pool", "error", err)
 		os.Exit(1)
 	}
 	defer pool.Close()
 
-	if cfg.AutoMigrate {
-		logger.Info("running database migrations", "path", cfg.MigrationsPath)
-		if err := database.RunMigrations(cfg.DatabaseURL, cfg.MigrationsPath); err != nil {
+	if cfg.Database.AutoMigrate {
+		logger.Info("running database migrations", "path", cfg.Database.MigrationsPath)
+		if err := database.RunMigrations(cfg.Database.URL, cfg.Database.MigrationsPath); err != nil {
 			logger.Error("failed to run migrations", "error", err)
 			os.Exit(1)
 		}
@@ -131,7 +131,7 @@ func main() {
 		}
 		respondJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
-	mux.HandleFunc(cfg.MetricsPath, func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc(cfg.HTTP.MetricsPath, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("# Metrics are exposed via OpenTelemetry to the configured OTLP endpoint\n"))
@@ -142,7 +142,7 @@ func main() {
 	handler := withRecovery(withLogging(httpadapter.WithMetrics(mux, httpMetrics)))
 
 	srv := &http.Server{
-		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
+		Addr:              fmt.Sprintf(":%d", cfg.HTTP.Port),
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
@@ -151,7 +151,7 @@ func main() {
 	}
 
 	go func() {
-		logger.Info("http server starting", "port", cfg.HTTPPort)
+		logger.Info("http server starting", "port", cfg.HTTP.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("http server error", "error", err)
 			stop()
@@ -159,7 +159,7 @@ func main() {
 	}()
 
 	<-ctx.Done()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.ShutdownGrace)*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.HTTP.ShutdownGrace)*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {

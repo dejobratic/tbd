@@ -9,41 +9,87 @@ import (
 
 // Config captures runtime configuration for the API service.
 type Config struct {
-	HTTPPort          int
-	DatabaseURL       string
-	AutoMigrate       bool
-	MigrationsPath    string
-	KafkaBrokers      []string
-	ServiceName       string
-	ServiceVersion    string
-	Environment       string
-	MetricsPath       string
-	ShutdownGrace     int
-	LogLevel          string
-	OTelEndpoint      string
-	OTelEnableTracing bool
-	OTelEnableMetrics bool
-	OTelSampleRate    float64
+	HTTP      HTTPConfig
+	Database  DatabaseConfig
+	Kafka     KafkaConfig
+	Telemetry TelemetryConfig
+	Service   ServiceConfig
+}
+
+type HTTPConfig struct {
+	Port          int
+	MetricsPath   string
+	ShutdownGrace int
+}
+
+type DatabaseConfig struct {
+	URL            string
+	AutoMigrate    bool
+	MigrationsPath string
+}
+
+type KafkaConfig struct {
+	Brokers []string
+}
+
+type TelemetryConfig struct {
+	LogLevel      string
+	OTelEndpoint  string
+	EnableTracing bool
+	EnableMetrics bool
+	SampleRate    float64
+}
+
+type ServiceConfig struct {
+	Name        string
+	Version     string
+	Environment string
 }
 
 const (
-	defaultPort           = 8080
-	defaultServiceName    = "tbd-api"
-	defaultServiceVersion = "0.1.0"
-	defaultEnvironment    = "development"
+	defaultHTTPPort       = 8080
 	defaultMetricsPath    = "/metrics"
 	defaultShutdownGrace  = 15
 	defaultMigrationsPath = "migrations"
+	defaultAutoMigrate    = true
+	defaultServiceName    = "tbd-api"
+	defaultServiceVersion = "0.1.0"
+	defaultEnvironment    = "development"
 	defaultLogLevel       = "info"
+	defaultOTelSampleRate = 1.0
 )
 
 // Load reads configuration from environment variables, applying defaults when needed.
 func Load() (*Config, error) {
-	port := defaultPort
+	httpCfg, err := loadHTTPConfig()
+	if err != nil {
+		return nil, fmt.Errorf("loading HTTP config: %w", err)
+	}
+
+	dbCfg := loadDatabaseConfig()
+	kafkaCfg := loadKafkaConfig()
+	telCfg, err := loadTelemetryConfig()
+	if err != nil {
+		return nil, fmt.Errorf("loading telemetry config: %w", err)
+	}
+
+	serviceCfg := loadServiceConfig()
+
+	return &Config{
+		HTTP:      httpCfg,
+		Database:  dbCfg,
+		Kafka:     kafkaCfg,
+		Telemetry: telCfg,
+		Service:   serviceCfg,
+	}, nil
+}
+
+func loadHTTPConfig() (HTTPConfig, error) {
+	port := defaultHTTPPort
 	if value, ok := os.LookupEnv("API_HTTP_PORT"); ok {
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
-			return nil, fmt.Errorf("invalid API_HTTP_PORT: %w", err)
+			return HTTPConfig{}, fmt.Errorf("invalid API_HTTP_PORT: %w", err)
 		}
 		port = parsed
 	}
@@ -52,94 +98,82 @@ func Load() (*Config, error) {
 	if value, ok := os.LookupEnv("API_SHUTDOWN_GRACE_SECONDS"); ok {
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
-			return nil, fmt.Errorf("invalid API_SHUTDOWN_GRACE_SECONDS: %w", err)
+			return HTTPConfig{}, fmt.Errorf("invalid API_SHUTDOWN_GRACE_SECONDS: %w", err)
 		}
 		shutdownGrace = parsed
 	}
 
-	serviceName := defaultServiceName
-	if value, ok := os.LookupEnv("API_SERVICE_NAME"); ok && value != "" {
-		serviceName = value
-	}
+	metricsPath := getEnvOrDefault("API_METRICS_PATH", defaultMetricsPath)
 
-	metricsPath := defaultMetricsPath
-	if value, ok := os.LookupEnv("API_METRICS_PATH"); ok && value != "" {
-		metricsPath = value
-	}
+	return HTTPConfig{
+		Port:          port,
+		MetricsPath:   metricsPath,
+		ShutdownGrace: shutdownGrace,
+	}, nil
+}
 
-	migrationsPath := defaultMigrationsPath
-	if value, ok := os.LookupEnv("MIGRATIONS_PATH"); ok && value != "" {
-		migrationsPath = value
-	}
-
-	autoMigrate := true
-	if value, ok := os.LookupEnv("AUTO_MIGRATE"); ok {
-		autoMigrate = value == "true"
-	}
-
+func loadDatabaseConfig() DatabaseConfig {
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		databaseURL = buildDatabaseURL()
 	}
 
-	brokers := []string{}
+	autoMigrate := defaultAutoMigrate
+	if value, ok := os.LookupEnv("AUTO_MIGRATE"); ok {
+		autoMigrate = value == "true"
+	}
+
+	migrationsPath := getEnvOrDefault("MIGRATIONS_PATH", defaultMigrationsPath)
+
+	return DatabaseConfig{
+		URL:            databaseURL,
+		AutoMigrate:    autoMigrate,
+		MigrationsPath: migrationsPath,
+	}
+}
+
+func loadKafkaConfig() KafkaConfig {
+	var brokers []string
 	if value, ok := os.LookupEnv("KAFKA_BROKERS"); ok && value != "" {
 		brokers = strings.Split(value, ",")
 	}
 
-	serviceVersion := defaultServiceVersion
-	if value, ok := os.LookupEnv("SERVICE_VERSION"); ok && value != "" {
-		serviceVersion = value
+	return KafkaConfig{
+		Brokers: brokers,
 	}
+}
 
-	environment := defaultEnvironment
-	if value, ok := os.LookupEnv("ENVIRONMENT"); ok && value != "" {
-		environment = value
-	}
-
-	logLevel := defaultLogLevel
-	if value, ok := os.LookupEnv("LOG_LEVEL"); ok && value != "" {
-		logLevel = value
-	}
-
+func loadTelemetryConfig() (TelemetryConfig, error) {
+	logLevel := getEnvOrDefault("LOG_LEVEL", defaultLogLevel)
 	otelEndpoint := getEnvOrDefault("OTEL_EXPORTER_OTLP_ENDPOINT", "")
 
-	otelEnableTracing := true
-	if value, ok := os.LookupEnv("OTEL_ENABLE_TRACING"); ok {
-		otelEnableTracing = value == "true"
-	}
+	enableTracing := getBoolEnv("OTEL_ENABLE_TRACING", true)
+	enableMetrics := getBoolEnv("OTEL_ENABLE_METRICS", true)
 
-	otelEnableMetrics := true
-	if value, ok := os.LookupEnv("OTEL_ENABLE_METRICS"); ok {
-		otelEnableMetrics = value == "true"
-	}
-
-	otelSampleRate := 1.0
+	sampleRate := defaultOTelSampleRate
 	if value, ok := os.LookupEnv("OTEL_SAMPLE_RATE"); ok {
 		parsed, err := strconv.ParseFloat(value, 64)
 		if err != nil {
-			return nil, fmt.Errorf("invalid OTEL_SAMPLE_RATE: %w", err)
+			return TelemetryConfig{}, fmt.Errorf("invalid OTEL_SAMPLE_RATE: %w", err)
 		}
-		otelSampleRate = parsed
+		sampleRate = parsed
 	}
 
-	return &Config{
-		HTTPPort:          port,
-		DatabaseURL:       databaseURL,
-		AutoMigrate:       autoMigrate,
-		MigrationsPath:    migrationsPath,
-		KafkaBrokers:      brokers,
-		ServiceName:       serviceName,
-		ServiceVersion:    serviceVersion,
-		Environment:       environment,
-		MetricsPath:       metricsPath,
-		ShutdownGrace:     shutdownGrace,
-		LogLevel:          logLevel,
-		OTelEndpoint:      otelEndpoint,
-		OTelEnableTracing: otelEnableTracing,
-		OTelEnableMetrics: otelEnableMetrics,
-		OTelSampleRate:    otelSampleRate,
+	return TelemetryConfig{
+		LogLevel:      logLevel,
+		OTelEndpoint:  otelEndpoint,
+		EnableTracing: enableTracing,
+		EnableMetrics: enableMetrics,
+		SampleRate:    sampleRate,
 	}, nil
+}
+
+func loadServiceConfig() ServiceConfig {
+	return ServiceConfig{
+		Name:        getEnvOrDefault("API_SERVICE_NAME", defaultServiceName),
+		Version:     getEnvOrDefault("SERVICE_VERSION", defaultServiceVersion),
+		Environment: getEnvOrDefault("ENVIRONMENT", defaultEnvironment),
+	}
 }
 
 func buildDatabaseURL() string {
@@ -163,6 +197,13 @@ func buildDatabaseURL() string {
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
+	}
+	return defaultValue
+}
+
+func getBoolEnv(key string, defaultValue bool) bool {
+	if value, ok := os.LookupEnv(key); ok {
+		return value == "true"
 	}
 	return defaultValue
 }

@@ -9,7 +9,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-var tracerName = "tbd"
+const tracerName = "github.com/dejobratic/tbd/internal/telemetry"
 
 func StartSpan(ctx context.Context, spanName string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
 	tracer := otel.Tracer(tracerName)

@@ -26,17 +26,19 @@ func (h *traceHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (h *traceHandler) Handle(ctx context.Context, r slog.Record) error {
-	traceAttrs := []slog.Attr{}
-	if traceID := TraceID(ctx); traceID != "" {
-		traceAttrs = append(traceAttrs, slog.String("trace_id", traceID))
-	}
-	if spanID := SpanID(ctx); spanID != "" {
-		traceAttrs = append(traceAttrs, slog.String("span_id", spanID))
-	}
-
 	handler := h.baseHandler
 
-	if len(traceAttrs) > 0 {
+	traceID := TraceID(ctx)
+	spanID := SpanID(ctx)
+
+	if traceID != "" || spanID != "" {
+		traceAttrs := make([]slog.Attr, 0, 2)
+		if traceID != "" {
+			traceAttrs = append(traceAttrs, slog.String("trace_id", traceID))
+		}
+		if spanID != "" {
+			traceAttrs = append(traceAttrs, slog.String("span_id", spanID))
+		}
 		handler = handler.WithAttrs(traceAttrs)
 	}
 
