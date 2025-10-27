@@ -9,22 +9,32 @@ import (
 
 // Config captures runtime configuration for the API service.
 type Config struct {
-	HTTPPort       int
-	DatabaseURL    string
-	AutoMigrate    bool
-	MigrationsPath string
-	KafkaBrokers   []string
-	ServiceName    string
-	MetricsPath    string
-	ShutdownGrace  int
+	HTTPPort          int
+	DatabaseURL       string
+	AutoMigrate       bool
+	MigrationsPath    string
+	KafkaBrokers      []string
+	ServiceName       string
+	ServiceVersion    string
+	Environment       string
+	MetricsPath       string
+	ShutdownGrace     int
+	LogLevel          string
+	OTelEndpoint      string
+	OTelEnableTracing bool
+	OTelEnableMetrics bool
+	OTelSampleRate    float64
 }
 
 const (
 	defaultPort           = 8080
 	defaultServiceName    = "tbd-api"
+	defaultServiceVersion = "0.1.0"
+	defaultEnvironment    = "development"
 	defaultMetricsPath    = "/metrics"
 	defaultShutdownGrace  = 15
 	defaultMigrationsPath = "migrations"
+	defaultLogLevel       = "info"
 )
 
 // Load reads configuration from environment variables, applying defaults when needed.
@@ -77,15 +87,58 @@ func Load() (*Config, error) {
 		brokers = strings.Split(value, ",")
 	}
 
+	serviceVersion := defaultServiceVersion
+	if value, ok := os.LookupEnv("SERVICE_VERSION"); ok && value != "" {
+		serviceVersion = value
+	}
+
+	environment := defaultEnvironment
+	if value, ok := os.LookupEnv("ENVIRONMENT"); ok && value != "" {
+		environment = value
+	}
+
+	logLevel := defaultLogLevel
+	if value, ok := os.LookupEnv("LOG_LEVEL"); ok && value != "" {
+		logLevel = value
+	}
+
+	otelEndpoint := getEnvOrDefault("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+
+	otelEnableTracing := true
+	if value, ok := os.LookupEnv("OTEL_ENABLE_TRACING"); ok {
+		otelEnableTracing = value == "true"
+	}
+
+	otelEnableMetrics := true
+	if value, ok := os.LookupEnv("OTEL_ENABLE_METRICS"); ok {
+		otelEnableMetrics = value == "true"
+	}
+
+	otelSampleRate := 1.0
+	if value, ok := os.LookupEnv("OTEL_SAMPLE_RATE"); ok {
+		parsed, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid OTEL_SAMPLE_RATE: %w", err)
+		}
+		otelSampleRate = parsed
+	}
+
 	return &Config{
-		HTTPPort:       port,
-		DatabaseURL:    databaseURL,
-		AutoMigrate:    autoMigrate,
-		MigrationsPath: migrationsPath,
-		KafkaBrokers:   brokers,
-		ServiceName:    serviceName,
-		MetricsPath:    metricsPath,
-		ShutdownGrace:  shutdownGrace,
+		HTTPPort:          port,
+		DatabaseURL:       databaseURL,
+		AutoMigrate:       autoMigrate,
+		MigrationsPath:    migrationsPath,
+		KafkaBrokers:      brokers,
+		ServiceName:       serviceName,
+		ServiceVersion:    serviceVersion,
+		Environment:       environment,
+		MetricsPath:       metricsPath,
+		ShutdownGrace:     shutdownGrace,
+		LogLevel:          logLevel,
+		OTelEndpoint:      otelEndpoint,
+		OTelEnableTracing: otelEnableTracing,
+		OTelEnableMetrics: otelEnableMetrics,
+		OTelSampleRate:    otelSampleRate,
 	}, nil
 }
 

@@ -200,6 +200,63 @@ Check UIs:
 
 ---
 
+## 🧪 Testing
+
+### Test Runner
+
+This project uses [**gotestsum**](https://github.com/gotesttool/gotestsum) for enhanced test output with color-coded results and better formatting. It's the industry-standard test runner for production Go projects.
+
+**Installation:**
+```bash
+go install gotest.tools/gotestsum@latest
+```
+
+### Running Tests
+
+Tests are executed via the Makefile, which provides race detection and disables test caching for reliable results:
+
+```bash
+# Run unit tests
+make test
+
+# Run integration tests (requires Docker)
+make integration
+
+# Run all tests
+make test-all
+```
+
+The Makefile uses the following flags:
+- `-race` — Detects data races in concurrent code
+- `-count=1` — Disables test caching for consistent behavior
+- `--format testname` — Displays readable `package.TestName` output
+
+### Test Naming Convention
+
+Tests follow a **behavior-focused naming pattern** to ensure they remain resilient to implementation changes:
+
+**Pattern:** `Test<Behavior>` with descriptive subtests describing expected outcomes.
+
+**Example:**
+```go
+func TestCreateOrder(t *testing.T) {
+    t.Run("creates pending order with valid input", func(t *testing.T) { /* ... */ })
+    t.Run("returns validation error when email is invalid", func(t *testing.T) { /* ... */ })
+    t.Run("returns error when repository fails", func(t *testing.T) { /* ... */ })
+}
+```
+
+**Why this pattern:**
+- **Resilient** — Method names are implementation details; tests verify behavior/contracts
+- **Readable** — Natural language describes what the system does, not how
+- **Maintainable** — Refactoring methods doesn't require renaming tests
+
+**Test types:**
+- **Unit tests** — Use in-memory mocks for application layer (commands, queries, domain logic)
+- **Integration tests** — Use testcontainers for adapter layer (PostgreSQL, Kafka)
+
+---
+
 ## 🗃️ Database Migrations
 
 This project uses [**golang-migrate/migrate**](https://github.com/golang-migrate/migrate) for database schema versioning and migrations.
@@ -356,6 +413,23 @@ WORKER_CONCURRENCY=5
 - `orders_created_total` — Business metric: orders created
 - `orders_processed_total` — Business metric: orders processed
 - `idempotency_hits_total` — Duplicate request prevention rate
+
+### Metrics Organization
+
+Metrics follow a **distributed, per-concern** pattern rather than a centralized approach:
+
+- **Database metrics** (`internal/database/metrics.go`) — Query duration, connection pool stats
+- **Kafka metrics** (`internal/kafka/metrics.go`) — Producer/consumer latency, publish success
+- **HTTP metrics** (`internal/orders/adapters/http/metrics.go`) — Request duration, status codes
+- **Business metrics** (`internal/orders/metrics/metrics.go`) — Orders created, processing duration
+
+**Why this pattern:**
+- **Separation of Concerns** — Each infrastructure package owns its observability
+- **Encapsulation** — HTTP middleware only accesses HTTP metrics, not DB/Kafka metrics
+- **Scalability** — Adding Redis/gRPC doesn't bloat a central metrics file
+- **Go Idiomatic** — Follows patterns used in Kubernetes, Prometheus, and Jaeger codebases
+
+All metrics share the same OpenTelemetry `MeterProvider` initialized in `internal/telemetry/otel.go`.
 
 ---
 
@@ -536,11 +610,15 @@ tbd/
 │   │   │   ├── repository.go      # OrderRepository interface
 │   │   │   ├── event_bus.go       # EventBus interface (generic, tech-agnostic)
 │   │   │   └── idempotency.go     # IdempotencyStore interface (generic)
+│   │   ├── metrics/
+│   │   │   └── metrics.go         # Business metrics (orders created, processing duration)
 │   │   └── adapters/
 │   │       ├── http/              # HTTP handlers, routing, validation, DTOs
 │   │       │   ├── handlers.go
 │   │       │   ├── routes.go
-│   │       │   └── dto.go
+│   │       │   ├── dto.go
+│   │       │   ├── metrics.go     # HTTP request metrics
+│   │       │   └── middleware.go  # HTTP metrics middleware
 │   │       ├── grpc/              # gRPC handlers (future)
 │   │       ├── postgres/          # OrderRepository impl using pgx/sqlc
 │   │       │   ├── repository.go
@@ -553,17 +631,14 @@ tbd/
 │   ├── database/                  # Database infrastructure
 │   │   ├── postgres.go            # Connection pooling setup
 │   │   ├── migrate.go             # golang-migrate runner
-│   │   └── health.go              # Health check helper
-│   ├── messaging/                 # Messaging infrastructure (tech-agnostic namespace)
-│   │   ├── kafka/                 # Kafka client setup, admin operations
-│   │   │   ├── client.go
-│   │   │   ├── admin.go           # Topic creation, etc.
-│   │   │   └── config.go
-│   │   └── middleware.go          # Message tracing, logging middleware
+│   │   ├── health.go              # Health check helper
+│   │   └── metrics.go             # Database query metrics
+│   ├── kafka/                     # Kafka infrastructure
+│   │   ├── noop.go                # No-op EventBus implementation
+│   │   └── metrics.go             # Kafka producer/consumer metrics
 │   └── telemetry/                 # Observability setup
-│       ├── otel.go                # OpenTelemetry initialization
-│       ├── metrics.go             # Prometheus metrics definitions
-│       ├── tracing.go             # Jaeger tracer setup
+│       ├── otel.go                # OpenTelemetry initialization (MeterProvider, TracerProvider)
+│       ├── tracing.go             # Jaeger tracer setup and span helpers
 │       └── logging.go             # Structured logger (zerolog/zap)
 ├── configs/
 │   ├── docker/                    # Docker-specific config files
@@ -583,7 +658,8 @@ tbd/
 **Key Design Principles:**
 - **Ports** (interfaces) use generic, tech-agnostic names (`EventBus`, `IdempotencyStore`)
 - **Adapters** (implementations) use specific names (`kafka/`, `postgres/`) for clarity
-- **Infrastructure** packages (`database/`, `messaging/`) provide shared setup and helpers
+- **Infrastructure** packages (`database/`, `kafka/`) provide shared setup and helpers
+- **Metrics are distributed** per concern (`database/metrics.go`, `kafka/metrics.go`, etc.) for encapsulation
 - **Single idempotency location** under `orders/adapters/idempotency/` (not duplicated)
 
 ---

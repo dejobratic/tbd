@@ -83,7 +83,7 @@ func findProjectRoot(t *testing.T) string {
 	}
 }
 
-func TestRepositoryCreate(t *testing.T) {
+func TestCreateOrder(t *testing.T) {
 	pool := setupTestDB(t)
 	repo := postgres.NewRepository(pool)
 	ctx := context.Background()
@@ -121,18 +121,20 @@ func TestRepositoryCreate(t *testing.T) {
 	}
 }
 
-func TestRepositoryGetByID_NotFound(t *testing.T) {
+func TestGetOrderByID(t *testing.T) {
 	pool := setupTestDB(t)
 	repo := postgres.NewRepository(pool)
 	ctx := context.Background()
 
-	_, err := repo.GetByID(ctx, "nonexistent-id")
-	if err != ports.ErrNotFound {
-		t.Errorf("expected ErrNotFound, got %v", err)
-	}
+	t.Run("returns not found error for nonexistent order", func(t *testing.T) {
+		_, err := repo.GetByID(ctx, "nonexistent-id")
+		if err != ports.ErrNotFound {
+			t.Errorf("expected ErrNotFound, got %v", err)
+		}
+	})
 }
 
-func TestRepositoryList(t *testing.T) {
+func TestListOrders(t *testing.T) {
 	pool := setupTestDB(t)
 	repo := postgres.NewRepository(pool)
 	ctx := context.Background()
@@ -224,50 +226,48 @@ func TestRepositoryList(t *testing.T) {
 	})
 }
 
-func TestRepositoryUpdateStatus(t *testing.T) {
+func TestUpdateOrderStatus(t *testing.T) {
 	pool := setupTestDB(t)
 	repo := postgres.NewRepository(pool)
 	ctx := context.Background()
 
-	order := domain.Order{
-		ID:            "test-order-update",
-		CustomerEmail: "user@example.com",
-		AmountCents:   1500,
-		Status:        domain.StatusPending,
-		CreatedAt:     time.Now().UTC(),
-		UpdatedAt:     time.Now().UTC(),
-	}
+	t.Run("updates status and timestamp for existing order", func(t *testing.T) {
+		order := domain.Order{
+			ID:            "test-order-update",
+			CustomerEmail: "user@example.com",
+			AmountCents:   1500,
+			Status:        domain.StatusPending,
+			CreatedAt:     time.Now().UTC(),
+			UpdatedAt:     time.Now().UTC(),
+		}
 
-	if err := repo.Create(ctx, order); err != nil {
-		t.Fatalf("failed to create order: %v", err)
-	}
+		if err := repo.Create(ctx, order); err != nil {
+			t.Fatalf("failed to create order: %v", err)
+		}
 
-	err := repo.UpdateStatus(ctx, order.ID, domain.StatusProcessing)
-	if err != nil {
-		t.Fatalf("failed to update status: %v", err)
-	}
+		err := repo.UpdateStatus(ctx, order.ID, domain.StatusProcessing)
+		if err != nil {
+			t.Fatalf("failed to update status: %v", err)
+		}
 
-	updated, err := repo.GetByID(ctx, order.ID)
-	if err != nil {
-		t.Fatalf("failed to retrieve order: %v", err)
-	}
+		updated, err := repo.GetByID(ctx, order.ID)
+		if err != nil {
+			t.Fatalf("failed to retrieve order: %v", err)
+		}
 
-	if updated.Status != domain.StatusProcessing {
-		t.Errorf("expected status processing, got %s", updated.Status)
-	}
+		if updated.Status != domain.StatusProcessing {
+			t.Errorf("expected status processing, got %s", updated.Status)
+		}
 
-	if !updated.UpdatedAt.After(order.UpdatedAt) {
-		t.Error("expected updated_at to be updated")
-	}
-}
+		if !updated.UpdatedAt.After(order.UpdatedAt) {
+			t.Error("expected updated_at to be updated")
+		}
+	})
 
-func TestRepositoryUpdateStatus_NotFound(t *testing.T) {
-	pool := setupTestDB(t)
-	repo := postgres.NewRepository(pool)
-	ctx := context.Background()
-
-	err := repo.UpdateStatus(ctx, "nonexistent-id", domain.StatusCompleted)
-	if err != ports.ErrNotFound {
-		t.Errorf("expected ErrNotFound, got %v", err)
-	}
+	t.Run("returns not found error for nonexistent order", func(t *testing.T) {
+		err := repo.UpdateStatus(ctx, "nonexistent-id", domain.StatusCompleted)
+		if err != ports.ErrNotFound {
+			t.Errorf("expected ErrNotFound, got %v", err)
+		}
+	})
 }

@@ -81,91 +81,85 @@ func findProjectRoot(t *testing.T) string {
 	}
 }
 
-func TestStoreSaveAndGet(t *testing.T) {
+func TestStoreIdempotencyKey(t *testing.T) {
 	pool := setupTestDB(t)
 	store := postgres.NewStore(pool)
 	ctx := context.Background()
 
-	key := "test-idempotency-key-1"
-	response := ports.StoredResponse{
-		StatusCode: 201,
-		Body:       []byte(`{"order_id": "test-order-1"}`),
-		OrderID:    "test-order-1",
-	}
+	t.Run("stores and retrieves idempotency key", func(t *testing.T) {
+		key := "test-idempotency-key-1"
+		response := ports.StoredResponse{
+			StatusCode: 201,
+			Body:       []byte(`{"order_id": "test-order-1"}`),
+			OrderID:    "test-order-1",
+		}
 
-	err := store.Save(ctx, key, response)
-	if err != nil {
-		t.Fatalf("failed to save idempotency key: %v", err)
-	}
+		err := store.Save(ctx, key, response)
+		if err != nil {
+			t.Fatalf("failed to save idempotency key: %v", err)
+		}
 
-	retrieved, err := store.Get(ctx, key)
-	if err != nil {
-		t.Fatalf("failed to get idempotency key: %v", err)
-	}
+		retrieved, err := store.Get(ctx, key)
+		if err != nil {
+			t.Fatalf("failed to get idempotency key: %v", err)
+		}
 
-	if retrieved == nil {
-		t.Fatal("expected response, got nil")
-	}
+		if retrieved == nil {
+			t.Fatal("expected response, got nil")
+		}
 
-	if retrieved.StatusCode != response.StatusCode {
-		t.Errorf("expected status code %d, got %d", response.StatusCode, retrieved.StatusCode)
-	}
+		if retrieved.StatusCode != response.StatusCode {
+			t.Errorf("expected status code %d, got %d", response.StatusCode, retrieved.StatusCode)
+		}
 
-	if string(retrieved.Body) != string(response.Body) {
-		t.Errorf("expected body %s, got %s", response.Body, retrieved.Body)
-	}
+		if string(retrieved.Body) != string(response.Body) {
+			t.Errorf("expected body %s, got %s", response.Body, retrieved.Body)
+		}
 
-	if retrieved.OrderID != response.OrderID {
-		t.Errorf("expected order ID %s, got %s", response.OrderID, retrieved.OrderID)
-	}
-}
+		if retrieved.OrderID != response.OrderID {
+			t.Errorf("expected order ID %s, got %s", response.OrderID, retrieved.OrderID)
+		}
+	})
 
-func TestStoreGet_NotFound(t *testing.T) {
-	pool := setupTestDB(t)
-	store := postgres.NewStore(pool)
-	ctx := context.Background()
+	t.Run("returns nil when key not found", func(t *testing.T) {
+		retrieved, err := store.Get(ctx, "nonexistent-key")
+		if err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
 
-	retrieved, err := store.Get(ctx, "nonexistent-key")
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
+		if retrieved != nil {
+			t.Errorf("expected nil response, got %v", retrieved)
+		}
+	})
 
-	if retrieved != nil {
-		t.Errorf("expected nil response, got %v", retrieved)
-	}
-}
+	t.Run("preserves first response on duplicate save", func(t *testing.T) {
+		key := "test-idempotency-key-conflict"
+		response1 := ports.StoredResponse{
+			StatusCode: 201,
+			Body:       []byte(`{"order_id": "order-1"}`),
+			OrderID:    "order-1",
+		}
+		response2 := ports.StoredResponse{
+			StatusCode: 200,
+			Body:       []byte(`{"order_id": "order-2"}`),
+			OrderID:    "order-2",
+		}
 
-func TestStoreSave_Conflict(t *testing.T) {
-	pool := setupTestDB(t)
-	store := postgres.NewStore(pool)
-	ctx := context.Background()
+		if err := store.Save(ctx, key, response1); err != nil {
+			t.Fatalf("failed to save first response: %v", err)
+		}
 
-	key := "test-idempotency-key-conflict"
-	response1 := ports.StoredResponse{
-		StatusCode: 201,
-		Body:       []byte(`{"order_id": "order-1"}`),
-		OrderID:    "order-1",
-	}
-	response2 := ports.StoredResponse{
-		StatusCode: 200,
-		Body:       []byte(`{"order_id": "order-2"}`),
-		OrderID:    "order-2",
-	}
+		if err := store.Save(ctx, key, response2); err != nil {
+			t.Fatalf("failed to save second response (conflict): %v", err)
+		}
 
-	if err := store.Save(ctx, key, response1); err != nil {
-		t.Fatalf("failed to save first response: %v", err)
-	}
+		retrieved, err := store.Get(ctx, key)
+		if err != nil {
+			t.Fatalf("failed to get response: %v", err)
+		}
 
-	if err := store.Save(ctx, key, response2); err != nil {
-		t.Fatalf("failed to save second response (conflict): %v", err)
-	}
-
-	retrieved, err := store.Get(ctx, key)
-	if err != nil {
-		t.Fatalf("failed to get response: %v", err)
-	}
-
-	if retrieved.OrderID != response1.OrderID {
-		t.Errorf("expected first response to be preserved, got order ID %s", retrieved.OrderID)
-	}
+		if retrieved.OrderID != response1.OrderID {
+			t.Errorf("expected first response to be preserved, got order ID %s", retrieved.OrderID)
+		}
+	})
 }

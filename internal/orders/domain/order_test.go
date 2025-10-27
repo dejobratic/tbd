@@ -7,7 +7,7 @@ import (
 	"github.com/dejobratic/tbd/internal/orders/domain"
 )
 
-func TestOrderValidate(t *testing.T) {
+func TestValidateOrder(t *testing.T) {
 	tests := []struct {
 		name    string
 		order   domain.Order
@@ -86,7 +86,7 @@ func TestOrderValidate(t *testing.T) {
 	}
 }
 
-func TestOrderIsTerminal(t *testing.T) {
+func TestCheckTerminalStatus(t *testing.T) {
 	tests := []struct {
 		name   string
 		status domain.OrderStatus

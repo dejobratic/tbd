@@ -14,21 +14,55 @@ import (
 	"github.com/dejobratic/tbd/internal/config"
 	"github.com/dejobratic/tbd/internal/database"
 	idempostgres "github.com/dejobratic/tbd/internal/idempotency/postgres"
-	"github.com/dejobratic/tbd/internal/kafka"
+	kafkapkg "github.com/dejobratic/tbd/internal/kafka"
+	ordersadapters "github.com/dejobratic/tbd/internal/orders/adapters"
 	httpadapter "github.com/dejobratic/tbd/internal/orders/adapters/http"
 	orderspostgres "github.com/dejobratic/tbd/internal/orders/adapters/postgres"
 	ordersapp "github.com/dejobratic/tbd/internal/orders/app"
+	ordersmetrics "github.com/dejobratic/tbd/internal/orders/metrics"
+	"github.com/dejobratic/tbd/internal/telemetry"
 )
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(logger)
+	ctx := context.Background()
 
 	cfg, err := config.Load()
 	if err != nil {
-		logger.Error("failed to load config", "error", err)
+		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
+
+	logLevel := parseLogLevel(cfg.LogLevel)
+	logger := telemetry.NewLogger(logLevel)
+	slog.SetDefault(logger)
+
+	tel, err := telemetry.Initialize(ctx, telemetry.Config{
+		ServiceName:     cfg.ServiceName,
+		ServiceVersion:  cfg.ServiceVersion,
+		Environment:     cfg.Environment,
+		OTLPEndpoint:    cfg.OTelEndpoint,
+		EnableTracing:   cfg.OTelEnableTracing,
+		EnableMetrics:   cfg.OTelEnableMetrics,
+		SampleRate:      cfg.OTelSampleRate,
+	})
+	if err != nil {
+		logger.Error("failed to initialize telemetry", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tel.Shutdown(shutdownCtx); err != nil {
+			logger.Error("failed to shutdown telemetry", "error", err)
+		}
+	}()
+
+	logger.Info("telemetry initialized",
+		"service", cfg.ServiceName,
+		"version", cfg.ServiceVersion,
+		"tracing_enabled", cfg.OTelEnableTracing,
+		"metrics_enabled", cfg.OTelEnableMetrics,
+	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -49,11 +83,41 @@ func main() {
 		logger.Info("migrations completed successfully")
 	}
 
-	repo := orderspostgres.NewRepository(pool)
-	idemStore := idempostgres.NewStore(pool)
-	eventBus := kafka.NewNoopEventBus()
+	meter := tel.MeterProvider().Meter("tbd-api")
 
-	service := ordersapp.NewService(repo, eventBus, idemStore)
+	dbMetrics, err := database.NewMetrics(meter)
+	if err != nil {
+		logger.Error("failed to initialize database metrics", "error", err)
+		os.Exit(1)
+	}
+
+	kafkaMetrics, err := kafkapkg.NewMetrics(meter)
+	if err != nil {
+		logger.Error("failed to initialize kafka metrics", "error", err)
+		os.Exit(1)
+	}
+
+	httpMetrics, err := httpadapter.NewMetrics(meter)
+	if err != nil {
+		logger.Error("failed to initialize http metrics", "error", err)
+		os.Exit(1)
+	}
+
+	businessMetrics, err := ordersmetrics.NewMetrics(meter)
+	if err != nil {
+		logger.Error("failed to initialize business metrics", "error", err)
+		os.Exit(1)
+	}
+
+	baseRepo := orderspostgres.NewRepository(pool)
+	repo := ordersadapters.NewObservableRepository(baseRepo, dbMetrics)
+
+	idemStore := idempostgres.NewStore(pool)
+
+	baseEventBus := kafkapkg.NewNoopEventBus()
+	eventBus := ordersadapters.NewObservableEventBus(baseEventBus, kafkaMetrics)
+
+	service := ordersapp.NewService(repo, eventBus, idemStore, logger, businessMetrics)
 	ordersHandler := httpadapter.NewHandler(service)
 
 	mux := http.NewServeMux()
@@ -70,12 +134,12 @@ func main() {
 	mux.HandleFunc(cfg.MetricsPath, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("# metrics are not yet implemented\n"))
+		_, _ = w.Write([]byte("# Metrics are exposed via OpenTelemetry to the configured OTLP endpoint\n"))
 	})
 
 	ordersHandler.Register(mux)
 
-	handler := withRecovery(withLogging(mux))
+	handler := withRecovery(withLogging(httpadapter.WithMetrics(mux, httpMetrics)))
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
@@ -140,4 +204,19 @@ func respondJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func parseLogLevel(level string) slog.Level {
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
 }
